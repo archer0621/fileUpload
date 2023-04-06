@@ -1,212 +1,262 @@
-### Axios简介
+## 文件上传的几种实现方式
 
-`axios` 是一个轻量的 `HTTP客户端`，它基于 `XMLHttpRequest` 服务来执行 HTTP 请求，支持丰富的配置，支持 `Promise`，支持浏览器端和 `Node.js` 端。
+### 1. Form-Data方式上传
 
-`axios` 的 `API` 链接 [API](http://www.axios-js.com/zh-cn/docs/)
-
-### Axios原生请求
-
-使用原生Axios代码实现数据请求，代码大概是这样的：
+主要使用form表单方式实现文件上传
 
 ~~~javascript
-axios('http://localhost:5000/getSomeData', {
-  method: 'GET',
-  timeout: 1000,
-  withCredentials: true,
-  headers: {
-    'Content-Type': 'application/json',
-    Authorization: 'xxx',
-  },
-  transformRequest: [function (data, headers) {
-    return data;
-  }]
-})
-.then((res) => {
-  // 业务逻辑代码
-  console.log(res);
-}, (err) => {
-  if (err.response.status === 401) {
-  // handle authorization error
-  }
-  if (err.response.status === 403) {
-  // handle server forbidden error
-  }
-  // 其他错误处理.....
-  console.log(err);
+let formData = new FormData();
+console.log(this.file);
+formData.append('file', this.file);
+formData.append('filename', this.file.name);
+instance.post('/upload_single', formData).then(res => {
+    if (+res.code === 0) {
+        this.fileTip = '图片上传成功!'
+        return;
+    }
+    return Promise.reject(res.codeText);
+}).catch(err => {
+    console.log(err);
 })
 ~~~
 
-可以看出在这段代码中很多都是重复代码，只有业务逻辑代码是真正需要操作的。
+### 2. BASE64方式上传
 
-**因此，对 `axios` 进行封装，提高代码的复用性，能够提高开发效率，减少代码冗余**
+使用FildReader获取文件的base64，将其上传
 
-### Axios封装
+~~~javascript
+let base64 = await changeBase64(that.file);
+try {
+    const data = await instance
+        .post('/upload_single_base64', {
+            file: encodeURIComponent(base64), // 防止乱码
+            filename: that.file.name
+        },{
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            }
+        })
+    const { code } = data;
+    if (code === 0) {
+        this.fileTip = '文件上传成功!';
+    }
+    throw data.codeText; // 抛出异常
+} catch (error) {
+	console.log(error);
+}
+~~~
 
-1. 在src中创建utils/http.js文件
+### 3. 文件缩略图显示，文件hash获取
 
-2. 引入axios
+根据文件内容展示缩略图(主要用于图片)，根据内容获取hash值判断后端是否存在该文件，节省上传时间
 
-   ~~~javascript
-   import axios from 'axios';
-   ~~~
+~~~javascript
+// 获取文件hash值
+const changeBuffer = (file) => {
+    return new Promise((resolve) => {
+        let fileReader = new FileReader();
+        fileReader.readAsArrayBuffer(file);
+        fileReader.onload = (e) => {
+            let buffer = e.target.result;
+            const spark = new SparkMD5.ArrayBuffer();
+            spark.append(buffer);
+            const HASH = spark.end();
+            const suffix = /\.([0-9a-zA-Z]+)$/.exec(file.name)[1];
+            resolve({
+                buffer,
+                HASH,
+                suffix,
+                filename: `${HASH}.${suffix}`,
+            });
+        };
+    });
+};
+// 展示缩略图
+let base64 = await changeBase64(file);
+upload_abber_img.src = base64;
+~~~
 
-3. 根据环境变量区分接口默认地址
+### 4. 文件上传进度条实现
 
-   ~~~javascript
-   switch (process.env.NODE_ENV) {
-     case "production":
-       // 生产环境
-       axios.defaults.baseURL = 'http://localhost:5000';
-       break;
-     case "test":
-       // 测试环境
-       axios.defaults.baseURL = 'http://localhost:5000';
-     default:
-       // 默认为开发环境
-       axios.defaults.baseURL = 'http://localhost:5000';
-   }
-   ~~~
+展示文件上传进度
 
-4. 设置超时和跨域请求是否允许携带凭证
+~~~javascript
+try {
+    let formData = new FormData();
+    formData.append('file', this.file);
+    formData.append('filename', this.file.name);
+    const data = await instance.post('/upload_single', formData, {
+        onUploadProgress: (e) => {
+            const { loaded, total } = e;
+            upload_progress.style.display = 'block';
+            upload_progrees_value.style.width = `${ (loaded / total) * 100 }%`;
+        },
+    });
+    if (+data.code === 0) {
+        upload_progrees_value.style.width = `100%`;
+        this.fileTip = '文件上传成功!'
+        return;
+    }
+    throw data.codeText;
+} catch (error) {
+    console.log(e);
+    this.fileTip = '文件上传失败!'
+} finally {
+    upload_progress.style.display = 'none';
+    upload_progrees_value.style.width = `0%`;
+}
+~~~
 
-   ~~~javascript
-   axios.defaults.timeout = 10000;
-   axios.defaults.withCredentials = true;
-   ~~~
+### 5. 文件拖拽上传
 
-5. 设置POST请求头
+使用原生JS事件 `dragenter` 、`drop` 、`dragover` 实现
 
-   ~~~javascript
-   axios.defaults.headers['Content-Type'] = 'application/x-www-form-urlencoded';
-   axios.defaults.transformRequest = data => qs.stringify(data);
-   ~~~
-
-6. 设置请求拦截器
-
-   ~~~javascript
-   axios.interceptors.request.use(config => {
-     let token = localStorage.getItem('token');
-     token && (config.headers.Authorization = token);
-     return config;
-   }, error => {
-     return new Promise.reject(error);
-   });
-   ~~~
-
-7. 响应拦截器
-
-   ~~~javascript
-   axios.defaults.validateStatus = status => {
-     // 自定义响应成功的HTTP状态码
-     return /^(2|3)\d{2}$/.test(status);
-   }
-   
-   axios.interceptors.response.use(response => {
-     // 返回响应主体中的信息
-     return response.data;
-   }, error => {
-     let { response } = error;
-     if (response) {
-       switch (response.status) {
-         //根据不同的状态码进行不同处理
-         case 401: //用户未登录状态
-           break;
-         case 403: // 服务器拒绝执行(token过期)
-           localStorage.removeItem('token');
-           // 跳转到登录页
-           break;
-         case 404: // 服务器无对应资源
-           // 跳转到404error页
-           break;
-       }
-       return Promise.reject(error.response);
-     } else {
-       // 断网处理
-       if (!window.navigator.onLine) {
-         // 跳转断网页面
-         return;
-       }
-       return Promise.reject(error);
-     }
-   })
-   ~~~
-
-8. 默认导出axios
-
-   ~~~javascript
-   export default axios;
-   ~~~
-
-### Axios封装api使用
-
-- 在src目录下创建 `api` 文件夹，把所有关于HTTP请求的接口都放到这个文件夹中管理
-
-- 创建接口请求文件，例如 `user.js` ，用于请求用户相关信息
-
-  ~~~javascript
-  import axios from '@/utils/http';
-  function login(params) {
-      return axios.get('/login', params);
+~~~javascript
+dragenter(e) {
+	e.preventDefault();
+},
+drop(e) {
+	e.preventDefault();
+    const {
+        dataTransfer: { files },
+    } = e;
+    const file = files[0];
+    this.fileTip = uploadFile(file);
+},
+dragover(e) {
+    e.preventDefault();
+},
+uploadChange(e) {
+    const file = e.target.files[0];
+    this.fileTip = uploadFile(file);
+},
+    
+const uploadFile = (file) => {
+  const that = this;
+  if (!file) {
+    alert('请选择您要上传的文件~');
+    return;
   }
-  function userInfo(params) {
-      return axios.get('/getUserInfo', params);
-  }
-  
-  export default {
-      login,
-      userInfo
-  }
-  ~~~
+  let formData = new FormData();
+  formData.append('file', file);
+  formData.append('filename', file.name);
+  let flag = false;
+  flag = instance
+    .post('/upload_single', formData)
+    .then(res => {
+      if (res.code === 0) {
+        return true;
+      }
+      return Promise.reject(res.codeText);
+    })
+    .catch(err => {
+      console.log(err);
+    })
+  return flag ? '文件上传成功!': '文件上传失败!';
+}
+~~~
 
-- 在 `api` 目录下创建 `index.js` ，用于统筹管理所有的接口文件
+### 6. 大文件切片上传
 
-  ~~~javascript
-  import user from './user';
-  
-  export default {
-      user
-  }
-  ~~~
+- 首先确定上传规模数量，判断当前文件可以切出多少切片，
+- 利用Bole.prototype.slice() 方法对文件进行切片并且对每个文件片作唯一标识(HASH)，
+- 从服务器获取已经上传的切片，判断切片是否存在
+- 将切片全部上传后，后端进行合并处理
 
-- 在 `main.js` 中引入 `api/index.js` ，并指向Vue的原型链上
+~~~javascript
+let chunkList = [], 
+    alreadyChunkList = [], 
+    maxSize = 1024 * 1024,
+    maxCount = Math.ceil(this.file.size / maxSize),
+    index = 0;
+const { HASH, suffix } = await this.fileHash(this.file);
+if (maxCount > 10) {
+    // 如果切片数量大于最大值
+    maxSize =this.file.size / 10; // 则改变切片大小
+    maxCount = 10;
+}
 
-  ~~~javascript
-  import api from '@/api/index';
-  Vue.prototype.$api = api;
-  ~~~
+while (index < maxCount) {
+    chunkList.push({
+        file: this.file.slice(index * maxSize, (index + 1) * maxSize),
+        filename: `${HASH}_${index + 1}.${suffix}`,
+    });
+    index++;
+}
 
-- 这样项目就可以全局使用 `$api` 来执行HTTP请求了
-
-  ~~~javascript
-  <template>
-    <div class="home">
-      <h1>This is home page</h1>
-    </div>
-  </template>
-  <script>
-  export default {
-    name: 'home',
-    methods: {
-      userInfo() {
-         this
-           .$api
-           .user
-           .userInfo(params) //axios请求在这里
-           .then((res) => {
-             // TODO res数据
-           })
-           .catch((err) => {
-             // 打印error
-         })    
-      } 
-        
+// 先获取已经上传的切片
+const data = await instance.post(
+    '/upload_already',
+    {
+        HASH: HASH,
     },
-  };
-  </script>
-  ~~~
+    {
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+    }
+);
+index = 0;
 
-### 总结
+const clear = () => {
+    upload_progress.style.display = 'none';
+    upload_progrees_value.style.width = '0%'
+}
+const complate = async () => {
+    index++;
+    upload_progress.style.display = 'block';
+    upload_progrees_value.style.width = `${ (index / maxCount) * 100 }%`;
+    if (index < maxCount) {
+        return;
+    }
+    upload_progrees_value.style.width = `100%`;
+    try {
+        let res = await instance
+        .post('/upload_merge', 
+              {
+            HASH,
+            maxCount
+        }, 
+              {
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'}
+        }
+             );
+        if (res.code === 0) {
+            this.fileTip = '大文件切片上传成功!';
+            clear();
+            return;
+        }
+        throw data.codeText;
+    } catch (error) {
+        clear();
+    }
+}
 
-1. 封装可以让我们在开发中提高效率，减少代码冗余，增加可维护性和bug定位；
-2. `axios` 封装没有绝对标准，只要满足你的项目需求，就算是一个优秀的封装方案；
-3. 以上是Vue框架下的axios，不使用vue的情况下，也可以选择直接在组件中导入 `api` 使用。
+const { fileList } = data;
+alreadyChunkList = fileList;
+chunkList.forEach(item => {
+    if (alreadyChunkList.length > 0 && alreadyChunkList.includes(item.filename)) {
+        debugger
+        // 切片已经存在
+        complate()
+        return;
+    }
+    const fm = new FormData();
+    fm.append('file', item.file);
+    fm.append('filename', item.filename);
+    instance
+        .post('/upload_chunk', fm)
+        .then(data => {
+        if (+data.code === 0) {
+            complate();
+            return;
+        }
+        return Promise.reject(data.codeText);
+    })
+        .catch(() => {
+        this.fileTip = '上传失败';
+        clear();
+    })
+});
+~~~
+
